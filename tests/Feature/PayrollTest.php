@@ -9,6 +9,7 @@ use App\Services\BackupService;
 use App\Support\Money;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Crypt;
 use Tests\TestCase;
 
 class PayrollTest extends TestCase
@@ -223,6 +224,23 @@ class PayrollTest extends TestCase
         $this->postJson("/api/employees/$employee->id/statements", ['from' => '2026-10-01', 'to' => '2026-10-02'])->assertUnprocessable();
     }
 
+    public function test_statement_creation_enforces_calendar_eligibility_on_the_server(): void
+    {
+        $employee = $this->employee(['start_date' => '2026-08-01', 'end_date' => '2026-09-30']);
+        $paid = $this->finalize($employee, '2026-08-31', '2026-09-02');
+        $this->postJson("/api/statements/$paid/pay", ['paid_on' => '2026-09-03'])->assertOk();
+        $unpaid = $this->finalize($employee, '2026-09-10', '2026-09-12');
+        foreach ([['2026-08-30', '2026-09-03'], ['2026-09-10', '2026-09-12'], ['2026-09-09', '2026-09-13'],
+            ['2026-07-31', '2026-08-02'], ['2026-09-30', '2026-10-01']] as [$from, $to]) {
+            $this->postJson("/api/employees/$employee->id/statements", compact('from', 'to'))
+                ->assertUnprocessable()->assertJsonValidationErrors('from');
+        }
+        $this->assertDatabaseCount('payroll_statements', 2);
+        $this->getJson("/api/statements/$unpaid")->assertOk()->assertJsonPath('status', 'finalized');
+        $this->finalize($employee, '2026-09-03', '2026-09-09');
+        $this->assertDatabaseCount('payroll_statements', 3);
+    }
+
     public function test_employee_uniqueness_archive_and_delete_rules(): void
     {
         $employee = $this->employee(['employee_number' => '001']);
@@ -236,6 +254,120 @@ class PayrollTest extends TestCase
         $empty = $this->employee();
         $this->deleteJson("/api/employees/$empty->id")->assertNoContent();
         $this->assertDatabaseMissing('salary_rates', ['employee_id' => $empty->id]);
+    }
+
+    public function test_reactivation_excludes_the_gap_and_keeps_paid_snapshots_and_rates(): void
+    {
+        $employee = $this->employee();
+        $this->absence($employee, '2026-09-02', .5);
+        $this->advance($employee, '2026-09-03', '50');
+        $id = $this->finalize($employee, '2026-09-01', '2026-09-05');
+        $this->postJson("/api/statements/$id/pay", ['paid_on' => '2026-09-05'])->assertOk();
+        $original = $this->getJson("/api/statements/$id")->json('snapshot');
+        $this->patchJson("/api/employees/$employee->id/archive", ['archived' => true, 'end_date' => '2026-09-05'])->assertOk();
+        $this->patchJson("/api/employees/$employee->id/archive", ['archived' => false, 'return_date' => '2026-09-10'])
+            ->assertOk()->assertJsonPath('archived_at', null)->assertJsonPath('start_date', '2026-08-01')
+            ->assertJsonPath('end_date', null)->assertJsonCount(2, 'employment_periods')
+            ->assertJsonPath('employment_periods.0.end_date', '2026-09-05')
+            ->assertJsonPath('employment_periods.1.start_date', '2026-09-10');
+        $this->assertSame($original, $this->getJson("/api/statements/$id")->json('snapshot'));
+        $this->assertEquals(1, $employee->salaryRates()->count());
+        $totals = $this->totals($employee, '2026-09-01', '2026-09-12');
+        $this->assertEquals(8, $totals['scheduled_days']);
+        $this->assertEquals(7.5, $totals['worked_days']);
+        $this->assertEquals(160000, $totals['base_cents']);
+        $this->assertEquals(85000, $totals['settled_cents']);
+        $this->assertEquals(60000, $totals['outstanding_cents']);
+        $gap = $this->totals($employee, '2026-09-06', '2026-09-09');
+        $this->assertEquals(0, $gap['scheduled_days']);
+        $this->assertEquals(0, $gap['absence_days']);
+        $this->assertEquals(0, $gap['remaining_cents']);
+        $this->getJson('/api/employees?from=2026-09-10&to=2026-09-12')
+            ->assertOk()->assertJsonPath('employees.0.totals.outstanding_cents', 60000);
+        $this->postJson("/api/employees/$employee->id/advances", ['date' => '2026-09-09', 'amount' => '10'])->assertUnprocessable();
+        $this->postJson("/api/employees/$employee->id/absences", ['date' => '2026-09-09', 'days' => 1, 'is_paid' => false])->assertUnprocessable();
+        $this->postJson("/api/employees/$employee->id/salary-rates", ['effective_date' => '2026-09-09', 'daily_salary' => '300'])->assertUnprocessable();
+        $this->postJson("/api/employees/$employee->id/statements", ['from' => '2026-09-08', 'to' => '2026-09-11'])->assertUnprocessable();
+        $this->finalize($employee, '2026-09-10', '2026-09-12');
+    }
+
+    public function test_multiple_returns_preserve_each_gap_and_protect_employment_history(): void
+    {
+        $employee = $this->employee();
+        foreach ([['2026-09-05', '2026-09-10'], ['2026-09-12', '2026-09-16']] as [$end, $return]) {
+            $this->patchJson("/api/employees/$employee->id/archive", ['archived' => true, 'end_date' => $end])->assertOk();
+            $this->patchJson("/api/employees/$employee->id/archive", ['archived' => true, 'end_date' => $end])->assertUnprocessable();
+            $this->patchJson("/api/employees/$employee->id/archive", ['archived' => false, 'return_date' => $return])->assertOk();
+        }
+        $this->patchJson("/api/employees/$employee->id/archive", ['archived' => true, 'end_date' => '2026-09-14'])->assertUnprocessable();
+        $this->patchJson("/api/employees/$employee->id/archive", ['archived' => false, 'return_date' => '2026-09-17'])->assertUnprocessable();
+        $this->postJson("/api/employees/$employee->id/salary-rates", ['effective_date' => '2026-09-16', 'daily_salary' => '250'])->assertCreated();
+        $totals = $this->totals($employee, '2026-09-01', '2026-09-18');
+        $this->assertEquals(11, $totals['worked_days']);
+        $this->assertEquals(235000, $totals['base_cents']);
+        $this->assertEquals(0, $this->totals($employee, '2026-09-13', '2026-09-15')['base_cents']);
+        $this->assertEquals(3, $employee->employmentPeriods()->count());
+        $this->putJson("/api/employees/$employee->id", array_merge($employee->fresh()->toArray(), ['phone' => '+212600001111']))->assertOk();
+        $this->putJson("/api/employees/$employee->id", array_merge($employee->fresh()->toArray(), ['start_date' => '2026-07-01']))->assertUnprocessable();
+        $this->deleteJson("/api/employees/$employee->id")->assertUnprocessable();
+    }
+
+    public function test_return_date_validation_and_legacy_active_employees_with_an_end_date(): void
+    {
+        // Previous versions could unarchive employees while retaining a closed end date.
+        $employee = $this->employee(['end_date' => '2026-09-05']);
+        foreach ([null, '2026-09-05', '2026-09-04', '2026-10-02'] as $return) {
+            $this->patchJson("/api/employees/$employee->id/archive", ['archived' => false, 'return_date' => $return])
+                ->assertUnprocessable()->assertJsonValidationErrors('return_date');
+        }
+        $this->assertEquals(1, $employee->employmentPeriods()->count());
+        $this->patchJson("/api/employees/$employee->id/archive", ['archived' => false, 'return_date' => '2026-09-06'])->assertOk();
+        // Return is inclusive, but Sunday still earns no salary on a Monday–Saturday calendar.
+        $this->assertEquals(0, $this->totals($employee, '2026-09-06', '2026-09-06')['base_cents']);
+        $this->assertEquals(20000, $this->totals($employee, '2026-09-07', '2026-09-07')['base_cents']);
+        $this->assertTrue($employee->fresh()->coversEmploymentRange('2026-09-04', '2026-09-07'));
+        $this->assertEquals('2026-08-01', $employee->fresh()->start_date);
+    }
+
+    public function test_migration_backfills_existing_active_and_archived_employee_dates(): void
+    {
+        $active = $this->employee();
+        $archived = $this->employee(['end_date' => '2026-09-05']);
+        $archived->update(['archived_at' => now()]);
+        $migration = require database_path('migrations/2026_09_13_000001_create_employment_periods_table.php');
+        $migration->down();
+        $migration->up();
+        $this->assertDatabaseCount('employment_periods', 2);
+        $this->assertDatabaseHas('employment_periods', ['employee_id' => $active->id, 'start_date' => '2026-08-01', 'end_date' => null]);
+        $this->assertDatabaseHas('employment_periods', ['employee_id' => $archived->id, 'start_date' => '2026-08-01', 'end_date' => '2026-09-05']);
+        $this->assertNotNull($archived->fresh()->archived_at);
+    }
+
+    public function test_backups_preserve_reactivation_periods_and_accept_old_backups(): void
+    {
+        $employee = $this->employee(['end_date' => '2026-09-05']);
+        $backup = app(BackupService::class);
+        $legacyPath = $backup->create();
+        $legacy = $backup->read($legacyPath);
+        $legacy['format'] = 'srt-payroll-v1';
+        unset($legacy['tables']['employment_periods']);
+        File::put($legacyPath, Crypt::encryptString(gzencode(json_encode($legacy, JSON_THROW_ON_ERROR))));
+        $this->patchJson("/api/employees/$employee->id/archive", ['archived' => false, 'return_date' => '2026-09-10'])->assertOk();
+        $currentPath = $backup->create();
+        try {
+            $this->patchJson("/api/employees/$employee->id/archive", ['archived' => true, 'end_date' => '2026-09-12'])->assertOk();
+            $backup->restore($currentPath);
+            $this->assertEquals(2, $employee->employmentPeriods()->count());
+            $this->assertNull($employee->fresh()->end_date);
+            $this->assertFalse($employee->fresh()->isEmployedOn('2026-09-09'));
+            $this->assertTrue($employee->fresh()->isEmployedOn('2026-09-10'));
+            $backup->restore($legacyPath);
+            $this->assertEquals(1, $employee->employmentPeriods()->count());
+            $this->assertEquals('2026-09-05', $employee->fresh()->end_date);
+            $this->assertFalse($employee->fresh()->isEmployedOn('2026-09-10'));
+        } finally {
+            File::delete([$legacyPath, $currentPath]);
+        }
     }
 
     public function test_initial_rate_can_be_corrected_but_not_removed(): void

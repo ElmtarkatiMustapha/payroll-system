@@ -46,11 +46,13 @@ docker compose exec app php artisan migrate --force
 - First-run administrator setup, rate-limited login, logout, password changes, session cookies, and CSRF protection.
 - Employee creation and editing; user-entered numeric employee numbers preserve leading zeros. CIN and employee number are unique.
 - Name, CIN, phone, start/end dates, T-shirt size, trouser size, notes, and archive status.
+- Reactivation with a return-to-work date and preserved employment periods; archived gaps earn no salary.
 - Search, status filters, pagination, and a dashboard for a selected payroll period.
 - Dated salary history: edit daily rates and add future effective rates.
 - Advance payments with date, exact decimal amount, and optional note; create, edit, and delete.
 - Paid/unpaid absences, full days or half-days, optional reasons; create, edit, and delete.
 - Payroll previews for any inclusive period up to 366 days.
+- An employee payroll calendar: red unfinalized dates, yellow finalized/unpaid dates, green paid dates, and grey future/out-of-employment dates. Labels and icons accompany the colours.
 - Finalized statements, recorded payment dates, prevention of overlapping settlements, and immutable payroll snapshots.
 - A4 printing and PDF creation through the browser's **Print / Save PDF** button. Choose **Save as PDF** in the print dialog. Arabic text is shaped by the browser and fonts are bundled locally.
 - Localized CSV exports compatible with Excel, including UTF-8 BOM and spreadsheet-formula protection.
@@ -59,7 +61,7 @@ docker compose exec app php artisan migrate --force
 
 ## Payroll rules
 
-For each scheduled date inside the employee's start/end dates, use the latest salary rate effective on that date.
+For each scheduled date inside one of the employee's employment periods, use the latest salary rate effective on that date.
 
 ```text
 Base salary       = sum of each scheduled day's rate
@@ -78,7 +80,15 @@ Historical dashboard totals reuse finalized daily snapshots, including their ori
 
 Payroll previews and printed statements show **Total paid payroll statements** immediately after total advances and subtract it from remaining pay. Only statements marked paid count. A fully included paid period contributes its net payment after its advances and absence deductions; partial overlaps contribute only the net earnings for the overlapping dates. Unpaid finalized statements are not deducted. Opening a paid statement itself shows its recorded payment and zero remaining pay while retaining its original stored snapshot. Daily breakdowns remain available on screen and are omitted from printing/PDF output.
 
-Employees with advances, absences, or statements are archived instead of permanently deleted. Archiving records the last employment day and preserves history. Unarchiving restores directory visibility and retains the end date; it does not silently restart salary accrual. Employment dates with finalized payroll are protected. Multiple separate employment contracts/rehiring are outside this version.
+Open an employee's **Payroll calendar** tab or **Payroll → Select unpaid days**. Select the first and last red dates, then preview and finalize. Single-day periods and selections across months are supported. A range cannot cross green paid dates or mix red dates with yellow finalized dates. Selecting a yellow day selects its whole existing statement; **Open unpaid statement** opens it for payment without creating another statement. Paid dates are disabled, and future dates or dates outside employment cannot be used for new statements. The server also rejects overlapping, future, and out-of-employment finalizations. Non-working days have a dot and retain the status of their calendar date; finalized dates use the saved working calendar.
+
+Use **Period report** to print a summary over arbitrary dates that includes prior payments. Reports do not create new statements. Finalized and paid receipts remain accessible in the statement list.
+
+Employees with payroll records or multiple employment periods are archived instead of permanently deleted. Archiving closes the current employment period on the chosen last working date and preserves earlier periods. Choose **Reactivate employee** and enter a **Return-to-work date** after the previous end date and no later than today. This creates a new employment period, restores Active status, and resumes salary on scheduled working days starting on the return date. The original employee number, CIN, original start date, salary history, entries, and finalized snapshots remain intact. Repeated departures and returns are supported; time between periods is never counted as working days or absence days and cannot receive new advances, absences, or salary rates. New payroll statements cannot cross those gaps, while period reports can span them and count only employment days.
+
+Employment periods appear on the employee profile after reactivation. The current salary history continues to apply; use Salary history to record a different rate effective on the return date if needed. A return on a non-working day resumes employment that day but salary starts on the next scheduled working day. Direct employment-date editing is locked after archiving, reactivation, or finalizing payroll. Employees reactivated in older versions who still have a past end date can also use Reactivate employee to record their actual return.
+
+The employment-period migration copies existing employees' start/end dates into their first period, including archived employees, without changing their existing payroll. New encrypted backups use format v2 and include all employment periods. The updated app also accepts v1 backups and reconstructs their original single employment period from each employee's saved dates.
 
 This version implements the agreed daily-pay/absence/advance rules. Tax withholding, statutory contributions, overtime, public-holiday calendars, and automatic carry-forward are not configured.
 
@@ -129,6 +139,7 @@ React uses Laravel's authenticated JSON endpoints on the same origin. Business c
 
 ```sh
 php artisan test
+node --test tests/calendar.test.mjs
 npm run check:translations
 npm run build
 npm run test:e2e

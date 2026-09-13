@@ -11,7 +11,7 @@ class PayrollCalculator
 {
     public function calculate(Employee $employee, string $from, string $to): array
     {
-        $employee->loadMissing(['salaryRates', 'advances', 'absences', 'statements']);
+        $employee->loadMissing(['salaryRates', 'advances', 'absences', 'statements', 'employmentPeriods']);
         $settings = Setting::current();
         $absences = $employee->absences->keyBy('date');
         $advances = $employee->advances->whereBetween('date', [$from, $to])->values();
@@ -32,7 +32,7 @@ class PayrollCalculator
             if (isset($lockedDays[$key])) {
                 $day = $lockedDays[$key];
             } else {
-                $scheduled = $key >= $employee->start_date && (! $employee->end_date || $key <= $employee->end_date)
+                $scheduled = $employee->isEmployedOn($key)
                     && in_array($date->dayOfWeekIso, $settings->working_days, true);
                 $rate = $employee->salaryRates->last(fn ($rate) => $rate->effective_date <= $key);
                 if ($scheduled && ! $rate) {
@@ -71,6 +71,7 @@ class PayrollCalculator
             'advances' => $advances->toArray(),
             'absences' => $employee->absences->whereBetween('date', [$from, $to])->values()->toArray(),
             'salary_rates' => $employee->salaryRates->toArray(),
+            'employment_periods' => $employee->employmentPeriods->toArray(),
             'generated_at' => now()->toIso8601String(),
         ];
     }

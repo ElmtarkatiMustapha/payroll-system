@@ -75,6 +75,9 @@ test.describe.serial('Payroll workspace', () => {
         await dialog.getByRole('button', { name: 'Save changes' }).click();
         await expect(dialog).not.toBeVisible();
         await page.getByRole('button', { name: 'Payroll', exact: true }).click();
+        await page.getByLabel('From', { exact: true }).fill(monthStart);
+        await page.getByLabel('To', { exact: true }).fill(periodEnd);
+        await page.getByRole('button', { name: 'Preview statement', exact: true }).click();
         await expect(page.locator('.statement-sheet')).toBeVisible();
         await expect(page.locator('.statement-sheet')).toContainText('Personal appointment');
         await expect(page.locator('.statement-paid-total')).toContainText('0.00');
@@ -147,6 +150,7 @@ test.describe.serial('Payroll workspace', () => {
             if (paid) expect((await request(page, `/statements/${(await response.json()).id}/pay`, 'POST', { paid_on: '2026-08-15' })).status()).toBe(200);
         }
         await page.goto(`/statements/new?employee=${employee.id}`);
+        await page.getByRole('button', { name: 'Period report', exact: true }).click();
         await page.getByLabel('From', { exact: true }).fill('2026-08-01');
         await page.getByLabel('To', { exact: true }).fill('2026-08-12');
         await page.getByRole('button', { name: 'Apply period', exact: true }).click();
@@ -178,6 +182,166 @@ test.describe.serial('Payroll workspace', () => {
         await page.getByRole('button', { name: 'Apply period', exact: true }).click();
         await expect(page.locator('.statement-paid-total strong')).toContainText('600.00');
         await expect(page.locator('.statement-total strong')).toContainText('0.00');
+    });
+
+    test('employee calendars enforce unpaid selection, open yellow statements and refresh after payment', async ({ page }) => {
+        await login(page);
+        const response = await request(page, '/employees', 'POST', {
+            name: 'Calendar Employee', employee_number: '997', cin: 'CA997', phone: '+212600000000',
+            start_date: '2026-07-30', end_date: '2026-08-31', tshirt_size: 'L', trouser_size: '44', daily_salary: '200',
+        });
+        expect(response.status()).toBe(201);
+        const employee = await response.json();
+        let unpaid;
+        for (const [from, to, paid] of [['2026-07-31', '2026-08-01', true], ['2026-08-05', '2026-08-07', true], ['2026-08-10', '2026-08-12', false]]) {
+            const result = await request(page, `/employees/${employee.id}/statements`, 'POST', { from, to });
+            expect(result.status()).toBe(201);
+            const statement = await result.json();
+            if (paid) expect((await request(page, `/statements/${statement.id}/pay`, 'POST', { paid_on: '2026-08-15' })).status()).toBe(200);
+            else unpaid = statement;
+        }
+        await page.goto(`/employees/${employee.id}`);
+        await page.getByRole('button', { name: 'Payroll calendar', exact: true }).click();
+        const day = date => page.locator(`.calendar-day[data-date="${date}"]`);
+        await expect(day('2026-08-05')).toHaveAttribute('data-status', 'paid');
+        await expect(day('2026-08-05')).toBeDisabled();
+        await expect(day('2026-08-10')).toHaveAttribute('data-status', 'finalized');
+        await expect(day('2026-08-03')).toHaveAttribute('data-status', 'unfinalized');
+        await day('2026-08-03').click();
+        await day('2026-08-08').click();
+        await expect(page.getByRole('alert')).toContainText('contains paid days');
+        await expect(page.getByRole('button', { name: 'Preview statement', exact: true })).toBeDisabled();
+        await page.getByLabel('From', { exact: true }).fill('2026-07-30');
+        await page.getByLabel('To', { exact: true }).fill('2026-08-02');
+        await expect(page.getByRole('alert')).toContainText('contains paid days');
+        await page.getByLabel('From', { exact: true }).fill('2026-08-09');
+        await page.getByLabel('To', { exact: true }).fill('2026-08-13');
+        await expect(page.getByRole('alert')).toContainText('crosses a finalized period');
+        await day('2026-08-10').click();
+        await expect(page.getByLabel('From', { exact: true })).toHaveValue('2026-08-10');
+        await expect(page.getByLabel('To', { exact: true })).toHaveValue('2026-08-12');
+        for (const locale of ['en', 'fr', 'ar']) {
+            const labels = JSON.parse(readFileSync(`resources/js/locales/${locale}.json`, 'utf8'));
+            await page.locator('.language-select').selectOption(locale);
+            await expect(page.locator('.calendar-heading h2')).toHaveText(labels.payroll_calendar);
+            await expect(page.getByRole('button', { name: labels.calendar_open_statement, exact: true })).toBeEnabled();
+        }
+        await page.setViewportSize({ width: 390, height: 844 });
+        await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+        await page.screenshot({ path: 'artifacts/calendar-ar-mobile.png', fullPage: true });
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await page.locator('.language-select').selectOption('en');
+        await page.screenshot({ path: 'artifacts/calendar-en.png', fullPage: true });
+        await page.getByRole('button', { name: 'Open unpaid statement', exact: true }).click();
+        await expect(page).toHaveURL(new RegExp(`/statements/${unpaid.id}$`));
+        await page.getByRole('button', { name: 'Mark as paid', exact: true }).click();
+        await page.getByRole('dialog').getByRole('button', { name: 'Mark as paid', exact: true }).click();
+        await expect(page.getByRole('dialog')).not.toBeVisible();
+        await page.goto(`/employees/${employee.id}`);
+        await page.getByRole('button', { name: 'Payroll calendar', exact: true }).click();
+        await expect(day('2026-08-10')).toHaveAttribute('data-status', 'paid');
+        await expect(day('2026-08-10')).toBeDisabled();
+        await day('2026-08-18').click();
+        await day('2026-08-20').click();
+        await page.getByRole('button', { name: 'Preview statement', exact: true }).click();
+        await expect(page).toHaveURL(/\/statements\/new\?/);
+        await expect(page.locator('.statement-total strong')).toContainText('600.00');
+        await page.emulateMedia({ media: 'print' });
+        await expect(page.locator('.payroll-calendar')).not.toBeVisible();
+        await expect(page.locator('.statement-sheet')).toBeVisible();
+        await page.emulateMedia({ media: 'screen' });
+        await page.getByRole('button', { name: 'Finalize statement', exact: true }).click();
+        await page.getByRole('dialog').getByRole('button', { name: 'Finalize statement', exact: true }).click();
+        await expect(page).toHaveURL(/\/statements\/\d+$/);
+        const history = await (await page.request.get(`/api/employees/${employee.id}`)).json();
+        expect(history.statements).toHaveLength(4);
+        expect(history.statements.find(s => s.from === '2026-08-18').to).toBe('2026-08-20');
+        await page.goto(`/statements/new?employee=${employee.id}`);
+        await expect(day('2026-08-19')).toHaveAttribute('data-status', 'finalized');
+        await page.getByLabel('Employee', { exact: true }).selectOption('1');
+        await expect(page.locator('.calendar-day[data-date="2026-09-01"]')).toBeDisabled();
+        await expect(page.locator('.statement-sheet')).not.toBeVisible();
+        await page.getByLabel('Go to month', { exact: true }).fill('2026-08');
+        await expect(day('2026-08-19')).toHaveAttribute('data-status', 'unavailable');
+    });
+
+    test('reactivation resumes on the return date and preserves two archived gaps and paid history', async ({ page }) => {
+        await login(page);
+        const result = await request(page, '/employees', 'POST', {
+            name: 'Returning Employee', employee_number: '995', cin: 'RE995', phone: '+212600000000',
+            start_date: '2026-08-01', tshirt_size: 'M', trouser_size: '42', daily_salary: '200',
+        });
+        expect(result.status()).toBe(201);
+        const employee = await result.json();
+        expect((await request(page, `/employees/${employee.id}/advances`, 'POST', { date: '2026-08-03', amount: '50' })).status()).toBe(201);
+        expect((await request(page, `/employees/${employee.id}/absences`, 'POST', { date: '2026-08-04', days: .5, is_paid: false })).status()).toBe(201);
+        const finalized = await request(page, `/employees/${employee.id}/statements`, 'POST', { from: '2026-08-01', to: '2026-08-05' });
+        expect(finalized.status()).toBe(201);
+        const original = await finalized.json();
+        expect((await request(page, `/statements/${original.id}/pay`, 'POST', { paid_on: '2026-08-05' })).status()).toBe(200);
+        await page.goto(`/employees/${employee.id}`);
+        await page.getByRole('button', { name: 'Archive employee', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByLabel('End date', { exact: true }).fill('2026-08-05');
+        await dialog.getByRole('button', { name: 'Archive employee', exact: true }).click();
+        await expect(dialog).not.toBeVisible();
+        await page.getByRole('button', { name: 'Reactivate employee', exact: true }).click();
+        for (const locale of ['fr', 'ar', 'en']) {
+            const labels = JSON.parse(readFileSync(`resources/js/locales/${locale}.json`, 'utf8'));
+            // Close the dialog to change the workspace language, then reopen it.
+            await dialog.getByRole('button', { name: locale === 'fr' ? 'Cancel' : locale === 'ar' ? 'Annuler' : 'إلغاء', exact: true }).click();
+            await page.locator('.language-select').selectOption(locale);
+            await page.getByRole('button', { name: labels.restore, exact: true }).click();
+            await expect(dialog.getByLabel(labels.return_date, { exact: true })).toBeVisible();
+            await expect(dialog.getByLabel(labels.return_date, { exact: true })).toHaveAttribute('min', '2026-08-06');
+        }
+        await dialog.getByLabel('Return-to-work date', { exact: true }).fill('2026-08-10');
+        await dialog.getByRole('button', { name: 'Reactivate employee', exact: true }).click();
+        await expect(dialog).not.toBeVisible();
+        await expect(page.locator('.employment-history li')).toHaveCount(2);
+        await expect(page.locator('.employment-history')).toContainText('10 Aug 2026');
+        await page.getByRole('button', { name: 'Edit employee', exact: true }).click();
+        await expect(dialog.getByLabel('Start date', { exact: true })).toBeDisabled();
+        await expect(dialog.getByLabel('End date', { exact: true })).toBeDisabled();
+        await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+        await page.getByRole('button', { name: 'Payroll calendar', exact: true }).click();
+        await page.getByLabel('Go to month', { exact: true }).fill('2026-08');
+        const day = date => page.locator(`.calendar-day[data-date="${date}"]`);
+        await expect(day('2026-08-05')).toHaveAttribute('data-status', 'paid');
+        await expect(day('2026-08-06')).toHaveAttribute('data-status', 'unavailable');
+        await expect(day('2026-08-06')).toBeDisabled();
+        await expect(day('2026-08-09')).toBeDisabled();
+        await expect(day('2026-08-10')).toHaveAttribute('data-status', 'unfinalized');
+        await page.getByRole('button', { name: 'Archive employee', exact: true }).click();
+        await dialog.getByLabel('End date', { exact: true }).fill('2026-08-12');
+        await dialog.getByRole('button', { name: 'Archive employee', exact: true }).click();
+        await expect(dialog).not.toBeVisible();
+        await page.getByRole('button', { name: 'Reactivate employee', exact: true }).click();
+        await dialog.getByLabel('Return-to-work date', { exact: true }).fill('2026-08-17');
+        await dialog.getByRole('button', { name: 'Reactivate employee', exact: true }).click();
+        await expect(dialog).not.toBeVisible();
+        await expect(page.locator('.employment-history li')).toHaveCount(3);
+        await expect(day('2026-08-13')).toBeDisabled();
+        await expect(day('2026-08-16')).toBeDisabled();
+        await day('2026-08-17').click();
+        await day('2026-08-18').click();
+        await page.getByRole('button', { name: 'Preview statement', exact: true }).click();
+        await expect(page.locator('.statement-total strong')).toContainText('400.00');
+        await page.getByRole('button', { name: 'Period report', exact: true }).click();
+        await page.getByLabel('From', { exact: true }).fill('2026-08-01');
+        await page.getByLabel('To', { exact: true }).fill('2026-08-18');
+        await page.getByRole('button', { name: 'Apply period', exact: true }).click();
+        await expect(page.locator('.statement-paid-total strong')).toContainText('650.00');
+        await expect(page.locator('.statement-total strong')).toContainText('1,000.00');
+        expect((await (await page.request.get(`/api/statements/${original.id}`)).json()).snapshot).toEqual(original.snapshot);
+        await page.goto(`/employees/${employee.id}`);
+        await page.getByRole('button', { name: 'Payroll calendar', exact: true }).click();
+        await page.getByLabel('Go to month', { exact: true }).fill('2026-08');
+        await page.locator('.language-select').selectOption('ar');
+        await page.setViewportSize({ width: 390, height: 844 });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+        await page.screenshot({ path: 'artifacts/reactivation-ar-mobile.png', fullPage: true });
     });
 
     test('settings, export, encrypted backup and employee deletion', async ({ page }) => {

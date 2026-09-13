@@ -6,10 +6,13 @@ export const shiftDate = (value, days) => {
     return isoDate(date);
 };
 
+export const employmentPeriods = employee => employee.employment_periods ?? [{ start_date: employee.start_date, end_date: employee.end_date }];
+export const isEmployedOn = (employee, date) => employmentPeriods(employee).some(period => period.start_date <= date && (!period.end_date || period.end_date >= date));
+
 export function payrollDay(employee, date, cutoff) {
     const statement = employee.statements.find(s => s.from <= date && s.to >= date);
     if (statement) return { status: statement.status === 'paid' ? 'paid' : 'finalized', statement };
-    if (date < employee.start_date || (employee.end_date && date > employee.end_date) || date > cutoff) {
+    if (!isEmployedOn(employee, date) || date > cutoff) {
         return { status: 'unavailable' };
     }
     return { status: 'unfinalized' };
@@ -34,6 +37,9 @@ export function payrollSelection(employee, range, cutoff) {
             return { status: 'finalized', statement: statements[0] };
         }
         return { error: 'calendar_finalized_range' };
+    }
+    for (let date = from; date <= to; date = shiftDate(date, 1)) {
+        if (!isEmployedOn(employee, date)) return { error: 'calendar_employment_gap' };
     }
     return { status: 'unfinalized' };
 }

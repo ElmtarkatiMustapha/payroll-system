@@ -40,7 +40,7 @@ class PayrollController extends Controller
             // Settings are locked before employees consistently when finalizing payroll.
             Setting::lockForUpdate()->findOrFail(1);
             $employee = Employee::lockForUpdate()->findOrFail($employee->id);
-            if ($from < $employee->start_date || ($employee->end_date && $to > $employee->end_date)) {
+            if (! $employee->coversEmploymentRange($from, $to)) {
                 throw ValidationException::withMessages(['from' => __('messages.outside_employment')]);
             }
             if ($employee->statements()->where('from', '<=', $to)->where('to', '>=', $from)->exists()) {

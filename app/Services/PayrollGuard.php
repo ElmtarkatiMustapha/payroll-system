@@ -16,7 +16,7 @@ class PayrollGuard
 
     public static function employmentDate(Employee $employee, string $date): void
     {
-        if ($date < $employee->start_date || ($employee->end_date && $date > $employee->end_date)) {
+        if (! $employee->isEmployedOn($date)) {
             throw ValidationException::withMessages(['date' => __('messages.outside_employment')]);
         }
     }

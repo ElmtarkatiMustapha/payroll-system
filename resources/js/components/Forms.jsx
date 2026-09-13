@@ -3,9 +3,11 @@ import { api, today } from '../lib/api';
 import { useApp, useForm } from '../lib/context';
 import { useI18n } from '../lib/i18n';
 import { Button, Field, FormError, Modal } from './ui';
+import { employmentPeriods, shiftDate } from '../lib/payroll-calendar';
 
 export function EmployeeForm({ employee, onClose, onSaved }) {
     const { t } = useI18n(); const { notify, refresh } = useApp();
+    const datesLocked = employee && (employee.archived_at || employee.statements?.length || employmentPeriods(employee).length > 1);
     const form = useForm(employee ? { ...employee, end_date: employee.end_date || '', notes: employee.notes || '' } : {
         name: '', employee_number: '', cin: '', phone: '', start_date: today(), end_date: '', tshirt_size: 'M', trouser_size: '', daily_salary: '', notes: '',
     });
@@ -17,12 +19,12 @@ export function EmployeeForm({ employee, onClose, onSaved }) {
         })}><div className="modal-body"><FormError errors={form.errors} /><div className="form-section-title">{t('personal_info')}</div>
             <div className="form-grid">{field('name', 'text', { required: true, autoFocus: true, maxLength: 255 })}{field('employee_number', 'text', { required: true, inputMode: 'numeric', pattern: '[0-9]+', maxLength: 30 })}{field('cin', 'text', { required: true, maxLength: 30 })}{field('phone', 'tel', { required: true, maxLength: 40 })}</div>
             <div className="form-section-title">{t('employment')}</div><div className="form-grid">
-                {field('start_date', 'date', { required: true })}{field('end_date', 'date', { min: form.values.start_date, hint: t('optional') })}
+                {field('start_date', 'date', { required: true, disabled: !!datesLocked })}{field('end_date', 'date', { min: form.values.start_date, hint: t('optional'), disabled: !!datesLocked })}
                 <Field label={t('tshirt_size')}><select value={form.values.tshirt_size} onChange={e => form.set('tshirt_size', e.target.value)}>{['XS','S','M','L','XL','XXL','3XL','4XL'].map(size => <option key={size}>{size}</option>)}</select></Field>
                 {field('trouser_size', 'text', { required: true, maxLength: 10 })}
                 {!employee && field('daily_salary', 'number', { required: true, min: '0.01', max: '1000000', step: '0.01' })}
             </div><Field label={t('notes')} hint={t('optional')}><textarea rows={3} value={form.values.notes} maxLength={2000} onChange={e => form.set('notes', e.target.value)} /></Field>
-            {employee && <p className="form-hint">{t('salary_history_hint')}</p>}
+            {datesLocked && <p className="form-hint">{t('employment_locked')}</p>}{employee && <p className="form-hint">{t('salary_history_hint')}</p>}
         </div><div className="modal-footer"><Button variant="secondary" type="button" onClick={onClose}>{t('cancel')}</Button><Button type="submit" busy={form.busy}>{t(employee ? 'save' : 'add_employee')}</Button></div></form>
     </Modal>;
 }
@@ -51,10 +53,12 @@ export function EntryForm({ type, entry, employeeId, employees = [], onClose }) 
 
 export function ArchiveForm({ employee, onClose }) {
     const { t } = useI18n(); const { refresh, notify } = useApp();
-    const form = useForm({ end_date: employee.end_date || today() });
-    return <Modal title={t(employee.archived_at ? 'restore' : 'archive')} onClose={onClose}><form onSubmit={event => form.submit(event, async values => {
-        await api('/employees/' + employee.id + '/archive', { method: 'PATCH', body: { archived: !employee.archived_at, end_date: values.end_date } });
+    const returning = !!employee.archived_at || (employee.end_date && employee.end_date < today());
+    const current = employmentPeriods(employee).at(-1);
+    const form = useForm({ end_date: employee.end_date || today(), return_date: today() });
+    return <Modal title={t(returning ? 'restore' : 'archive')} onClose={onClose}><form onSubmit={event => form.submit(event, async values => {
+        await api('/employees/' + employee.id + '/archive', { method: 'PATCH', body: returning ? { archived: false, return_date: values.return_date } : { archived: true, end_date: values.end_date } });
         refresh(); notify(t('saved')); onClose();
-    })}><div className="modal-body"><p className="muted">{t(employee.archived_at ? 'unarchive_hint' : 'archive_hint')}</p><FormError errors={form.errors} />{!employee.archived_at && <Field label={t('end_date')} type="date" required min={employee.start_date} value={form.values.end_date} onChange={e => form.set('end_date', e.target.value)} />}</div>
-        <div className="modal-footer"><Button type="button" variant="secondary" onClick={onClose}>{t('cancel')}</Button><Button busy={form.busy} type="submit">{t(employee.archived_at ? 'restore' : 'archive')}</Button></div></form></Modal>;
+    })}><div className="modal-body"><p className="muted">{t(returning ? 'unarchive_hint' : 'archive_hint')}</p><FormError errors={form.errors} />{returning ? <Field label={t('return_date')} type="date" required min={current.end_date ? shiftDate(current.end_date, 1) : undefined} max={today()} value={form.values.return_date} onChange={e => form.set('return_date', e.target.value)} /> : <Field label={t('end_date')} type="date" required min={current.start_date} value={form.values.end_date} onChange={e => form.set('end_date', e.target.value)} />}</div>
+        <div className="modal-footer"><Button type="button" variant="secondary" onClick={onClose}>{t('cancel')}</Button><Button busy={form.busy} type="submit">{t(returning ? 'restore' : 'archive')}</Button></div></form></Modal>;
 }
