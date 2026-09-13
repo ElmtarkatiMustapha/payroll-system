@@ -1,0 +1,78 @@
+name: srt-payroll
+
+x-app: &app
+  image: srt-payroll-app:local
+  env_file: .env
+  environment:
+    APP_NAME: SRT Payroll
+    APP_ENV: production
+    APP_DEBUG: "false"
+    APP_URL: http://localhost:${APP_PORT:-8080}
+    DB_CONNECTION: mysql
+    DB_HOST: mysql
+    DB_PORT: 3306
+    DB_DATABASE: payroll
+    DB_USERNAME: payroll
+    DB_PASSWORD: ${DB_PASSWORD:?Run scripts/setup.ps1 or scripts/setup.sh first}
+    SESSION_DRIVER: database
+    SESSION_COOKIE: srt_payroll_session
+    CACHE_STORE: database
+    QUEUE_CONNECTION: sync
+    LOG_CHANNEL: stderr
+  volumes:
+    - payroll-storage:/var/www/html/storage
+  depends_on:
+    mysql:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  app:
+    <<: *app
+    build:
+      context: .
+      target: application
+    healthcheck:
+      test: ["CMD", "php", "artisan", "payroll:health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+  nginx:
+    build:
+      context: .
+      target: web
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:80"
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: payroll
+      MYSQL_USER: payroll
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Run setup first}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Run setup first}
+    volumes:
+      - payroll-mysql-data:/var/lib/mysql
+    stop_grace_period: 1m
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_PASSWORD mysql -h 127.0.0.1 -u payroll -D payroll -e 'SELECT 1' >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    restart: unless-stopped
+  scheduler:
+    <<: *app
+    pull_policy: never
+    command: ["php", "artisan", "schedule:work"]
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  payroll-mysql-data:
+  payroll-storage:
