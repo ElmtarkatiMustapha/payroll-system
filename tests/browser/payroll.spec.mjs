@@ -165,11 +165,13 @@ test.describe.serial('Payroll workspace', () => {
             const money = cents => new Intl.NumberFormat({ en: 'en-GB', fr: 'fr-FR', ar: 'ar-MA' }[locale], { style: 'currency', currency: 'MAD' }).format(cents / 100);
             await expect(page.locator('.statement-paid-total strong')).toHaveText('− ' + money(105000));
             await expect(page.locator('.statement-total strong')).toHaveText(money(60000));
+            await expect(page.locator('.statement-daily-rate')).toBeVisible();
             await page.locator('.statement-daily button').click();
             await expect(page.locator('.daily-table')).toBeVisible();
             await page.emulateMedia({ media: 'print' });
             await expect(page.locator('.statement-paid-total')).toBeVisible();
             await expect(page.locator('.statement-total')).toBeVisible();
+            await expect(page.locator('.statement-daily-rate')).not.toBeVisible();
             await expect(page.locator('.statement-daily')).not.toBeVisible();
             await page.pdf({ path: `artifacts/paid-period-${locale}.pdf`, format: 'A4', printBackground: true, preferCSSPageSize: true });
             if (locale === 'ar') await page.screenshot({ path: 'artifacts/paid-period-ar.png', fullPage: true });

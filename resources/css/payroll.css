@@ -156,7 +156,7 @@ tr:nth-child(3n+3) .avatar, .recent-item:nth-child(3n+3) .avatar { background: #
 @page { size: A4; margin: 14mm; }
 @media print {
   :root, body { background: #fff !important; font-size: 10pt; color: #222; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .sidebar, .topbar, .app-footer, .no-print, .toast, .sidebar-backdrop, .modal, .period-picker { display: none !important; }
+  .sidebar, .topbar, .app-footer, .no-print, .toast, .sidebar-backdrop, .modal, .period-picker, .statement-daily-rate { display: none !important; }
   .app-shell, .main-shell, .main-content { display: block; width: 100%; max-width: none; margin: 0; padding: 0; }
   .statement-sheet { border: 0; border-radius: 0; padding: 0; margin: 0; max-width: none; box-shadow: none; }
   .statement-days { grid-template-columns: repeat(4, 1fr); }.statement-letterhead, .statement-employee { flex-wrap: nowrap; }.statement-ref, .statement-period { text-align: end; }

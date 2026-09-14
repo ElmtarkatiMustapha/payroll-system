@@ -54,7 +54,7 @@ docker compose exec app php artisan migrate --force
 - Payroll previews for any inclusive period up to 366 days.
 - An employee payroll calendar: red unfinalized dates, yellow finalized/unpaid dates, green paid dates, and grey future/out-of-employment dates. Labels and icons accompany the colours.
 - Finalized statements, recorded payment dates, prevention of overlapping settlements, and immutable payroll snapshots.
-- A4 printing and PDF creation through the browser's **Print / Save PDF** button. Choose **Save as PDF** in the print dialog. Arabic text is shaped by the browser and fonts are bundled locally.
+- A4 printing and PDF creation through the browser's **Print / Save PDF** button. Choose **Save as PDF** in the print dialog. Daily salary rates are visible on screen but omitted from printed statements and PDFs. Arabic text is shaped by the browser and fonts are bundled locally.
 - Localized CSV exports compatible with Excel, including UTF-8 BOM and spreadsheet-formula protection.
 - Manual encrypted backup downloads and automatic daily backups.
 - Responsive desktop and mobile screens; persisted language preference.
